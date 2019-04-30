@@ -29,6 +29,7 @@ var pluginErr = errs.Class("istio")
 type IstioAttestorPlugin struct {
 	// Kubernetes client to verify provided token
 	kubeClient *kubernetes.Clientset
+	config     *attestorConfig
 	mtx        *sync.Mutex
 }
 
@@ -37,10 +38,14 @@ type IstioAttestorConfig struct {
 	ConfigPath string `hcl:"k8s_config_path"`
 }
 
+// attestorConfig holds istio attestor configurations
+type attestorConfig struct {
+	TrustDomain string
+}
+
 // istioAttestedData holds data provided for istio node agent
 type istioAttestedData struct {
-	Token       string `json:"token"`
-	TrustDomain string `json:"trustDomain"`
+	Token string `json:"token"`
 }
 
 // JWTClaims holds namespace and service account from token verification
@@ -86,7 +91,7 @@ func (i *IstioAttestorPlugin) Attest(stream nodeattestor.NodeAttestor_AttestServ
 
 	return stream.Send(&nodeattestor.AttestResponse{
 		Valid:        true,
-		BaseSPIFFEID: fmt.Sprintf(spiffeIdTemplate, attestedData.TrustDomain, claim.Namespace, claim.ServiceAccount),
+		BaseSPIFFEID: fmt.Sprintf(spiffeIdTemplate, i.config.TrustDomain, claim.Namespace, claim.ServiceAccount),
 	})
 }
 
@@ -104,9 +109,16 @@ func (i *IstioAttestorPlugin) Configure(ctx context.Context, req *spi.ConfigureR
 		return nil, pluginErr.New("error creating kubeClient: %v ", err)
 	}
 
+	if req.GlobalConfig == nil || req.GlobalConfig.TrustDomain == "" {
+		return nil, pluginErr.New("trust domain is not provided in global configuration")
+	}
+
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
 	i.kubeClient = kubeClient
+	i.config = &attestorConfig{
+		TrustDomain: req.GlobalConfig.TrustDomain,
+	}
 
 	return &spi.ConfigureResponse{}, nil
 }
